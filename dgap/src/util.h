@@ -65,7 +65,7 @@ flush_clwb_nolog(const void *addr, size_t len)
 #define CREATE_MODE_RW (S_IWUSR | S_IRUSR)
 
 /* size of the pmem object pool -- 8 GB */
-#define DB_POOL_SIZE (((size_t)1) << 39)
+#define DB_POOL_SIZE (((size_t)1) << 33)
 //#define DB_POOL_SIZE ((((size_t)1) << 39) + (((size_t)1) << 37))
 //#define DB_POOL_SIZE (((size_t)1) << 31)
 
