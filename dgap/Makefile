@@ -1,8 +1,9 @@
 # See LICENSE.txt for license details.
 
 CXX_FLAGS += -std=c++11 -g -rdynamic -O3 -Wall -g
-LDLIBS = -lpmemobj -lpmem
+LDLIBS = -lpmemobj -lpmem -lralloc -lpthread
 PAR_FLAG = -fopenmp
+RALLOC_PATH = ../ralloc
 
 ifneq (,$(findstring icpc,$(CXX)))
 	PAR_FLAG = -openmp
@@ -24,7 +25,7 @@ SUITE = $(KERNELS)
 all: $(SUITE)
 
 % : src/%.cc src/*.h
-	$(CXX) $< -o $@ $(CXX_FLAGS) $(LDLIBS)
+	$(CXX) -L $(RALLOC_PATH)/test -I$(RALLOC_PATH)/src  $< -o $@ $(CXX_FLAGS) $(LDLIBS)
 
 .PHONY: clean
 clean:
