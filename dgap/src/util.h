@@ -89,7 +89,13 @@ enum root{
   LOG_SEG_IDX_ROOT,
   SEG_EDGES_ACTUAL_ROOT,
   SEG_EDGES_TOTAL_ROOT,
-  BP_ROOT
+  NUM_VERT_ROOT,
+  NUM_EDGES_ROOT,
+  ELEM_CAP_ROOT,
+  SEG_COUNT_ROOT,
+  SEG_SIZE_ROOT,
+  TREE_HEIGHT_ROOT,
+  BACK_UP_ROOT
 };
 
 static inline int file_exists(char const *file) {
