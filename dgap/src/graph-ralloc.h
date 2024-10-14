@@ -133,32 +133,27 @@ struct vertex_element {
 
 /* the root object */
 struct Base {
-  uint64_t pool_uuid_lo;
+  struct vertex_element* vertices_;
+  DestID_* edges_;
+  struct LogEntry* ulog_;              // undo logs
+  DestID_* oplog_;                      // operation logs
+  struct LogEntry* log_segment_;       // logs per segment
+  int32_t* log_segment_idx_;          // current insert-index of logs per segment
 
-/*
-  PMEMoid vertices_oid_;
-  PMEMoid edges_oid_;
-  PMEMoid ulog_oid_;              // oid of undo logs
-  PMEMoid oplog_oid_;             // oid of operation logs
-  PMEMoid log_segment_oid_;       // oid of logs per segment
-  PMEMoid log_segment_idx_oid_;   // oid of current insert-index of logs per segment
-
-  PMEMoid segment_edges_actual_oid_;  // actual number of edges stored in the region of a binary-tree node
-  PMEMoid segment_edges_total_oid_;   // total number of edges assigned in the region of a binary-tree node
- */
-
+  int4_t* segment_edges_actual_oid_;  // actual number of edges stored in the region of a binary-tree node
+  int4_t* segment_edges_total_oid_;   // total number of edges assigned in the region of a binary-tree node
   /* General graph fields */
-  int64_t num_vertices;   // Number of vertices
-  int64_t num_edges_;     // Number of edges
+  int64_t* num_vertices;   // Number of vertices
+  int64_t* num_edges_;     // Number of edges
 
   /* General PMA fields */
-  int64_t elem_capacity; // size of the edges_ array
-  int64_t segment_count; // number of pma leaf segments
-  int32_t segment_size;  // size of a pma leaf segment
-  int32_t tree_height;   // height of the pma tree
+  int64_t* elem_capacity; // size of the edges_ array
+  int64_t* segment_count; // number of pma leaf segments
+  int32_t* segment_size;  // size of a pma leaf segment
+  int32_t* tree_height;   // height of the pma tree
 
   bool directed_;
-  bool backed_up_;
+  bool* backed_up_;
   char padding_[6];    //6 Bytes
 } __attribute__ ((aligned (8)));
 
@@ -322,43 +317,21 @@ public:
 
   ~CSRGraph() {
      // memcpy = RP_set_root()
-    memcpy((struct vertex_element *) pmemobj_direct(bp->vertices_oid_), vertices_,
-           num_vertices * sizeof(struct vertex_element));
-    flush_clwb_nolog((struct vertex_element *) pmemobj_direct(bp->vertices_oid_),
-                     num_vertices * sizeof(struct vertex_element));
+    RP_set_root(vertices_, VERTEX_ROOT);
+    RP_set_root(log_segment_idx_, LOG_SEG_IDX_ROOT);
+    RP_set_root(segment_edges_actual, SEG_EDGES_ACTUAL_ROOT);
+    RP_set_root(segment_edges_total, SEG_EDGES_ACTUAL_ROOT);
 
-    memcpy((int32_t *) pmemobj_direct(bp->log_segment_idx_oid_), log_segment_idx_, segment_count * sizeof(int32_t));
-    flush_clwb_nolog((int32_t *) pmemobj_direct(bp->log_segment_idx_oid_), segment_count * sizeof(int32_t));
-
-    memcpy((int64_t *) pmemobj_direct(bp->segment_edges_actual_oid_), segment_edges_actual,
-           sizeof(int64_t) * segment_count * 2);
-    flush_clwb_nolog((int64_t *) pmemobj_direct(bp->segment_edges_actual_oid_), sizeof(int64_t) * segment_count * 2);
-
-    memcpy((int64_t *) pmemobj_direct(bp->segment_edges_total_oid_), segment_edges_total,
-           sizeof(int64_t) * segment_count * 2);
-    flush_clwb_nolog((int64_t *) pmemobj_direct(bp->segment_edges_total_oid_), sizeof(int64_t) * segment_count * 2);
-
-    bp->num_vertices = num_vertices;  // Number of vertices
-    flush_clwb_nolog(&bp->num_vertices, sizeof(int64_t));
-
-    bp->num_edges_ = num_edges_;  // Number of edges
-    flush_clwb_nolog(&bp->num_edges_, sizeof(int64_t));
-
-    bp->elem_capacity = elem_capacity;
-    flush_clwb_nolog(&bp->elem_capacity, sizeof(int64_t));
-
-    bp->segment_count = segment_count;
-    flush_clwb_nolog(&bp->segment_count, sizeof(int64_t));
-
-    bp->segment_size = segment_size;
-    flush_clwb_nolog(&bp->segment_size, sizeof(int64_t));
-
-    bp->tree_height = tree_height;
-    flush_clwb_nolog(&bp->tree_height, sizeof(int64_t));
-
-    // write flag indicating data has been backed up properly before shutting down
+    RP_set_root(bp->num_vertices, NUM_VERT_ROOT);  // Number of vertices
+    RP_set_root(num_edges_, NUM_EDGES_ROOT);  // Number of edges 
+    RP_set_root(elem_capacity, ELEM_CAP_ROOT);
+    RP_set_root(segment_count, SEG_COUNT_ROOT);
+    RP_set_root(segment_size, SEG_SIZE_ROOT);
+    RP_set_root(tree_height, TREE_HEIGHT_ROOT);
+    // write flag indicating data has been backed up properly before shutting down (do I need to remove this?)
     bp->backed_up_ = true;
-    flush_clwb_nolog(&bp->backed_up_, sizeof(bool));
+
+    RP_close();
 
     ReleaseResources();
   }
@@ -368,20 +341,16 @@ public:
     num_threads = omp_get_max_threads();
 
     /* file already exists */
-    if (file_exists(file) == 0) {
-      if ((pop = pmemobj_open(file, LAYOUT_NAME)) == NULL) {
-        fprintf(stderr, "[%s]: FATAL: pmemobj_open error: %s\n", __FUNCTION__, pmemobj_errormsg());
-        exit(0);
-      }
+    if (RP_init(DB_POOL_SIZE) == 0) {
+      is_new = true;
     } else {
       if ((pop = pmemobj_create(file, LAYOUT_NAME, DB_POOL_SIZE, CREATE_MODE_RW)) == NULL) {
         fprintf(stderr, "[%s]: FATAL: pmemobj_create error: %s\n", __FUNCTION__, pmemobj_errormsg());
         exit(0);
       }
-      is_new = true;
+      
     }
 
-    base_oid = pmemobj_root(pop, sizeof(struct Base));
     bp = (struct Base *) pmemobj_direct(base_oid);
     check_sanity(bp);
 
@@ -414,98 +383,25 @@ public:
 
       /*TODO: set bp attributes as the pointers allocated below (?)*/
       // allocate memory for vertices and edges in pmem-domain
-      /*
-      if (pmemobj_zalloc(pop, &bp->vertices_oid_, num_vertices * sizeof(struct vertex_element), VERTEX_TYPE)) {
-        fprintf(stderr, "[%s]: FATAL: vertex array allocation failed: %s\n", __func__, pmemobj_errormsg());
-        abort();
-      }
-      */
-      struct vertex_element* vertices_ptr = RP_malloc(sizeof(struct vertex_element) * num_vertices);
-      if (vertices_ptr == NULL) {
-        fprintf(stderr, "[%s]: FATAL: vertex array allocation failed\n", __func__);
-        abort();
-      }
 
-      /*
-      if (pmemobj_zalloc(pop, &bp->edges_oid_, elem_capacity * sizeof(DestID_), EDGE_TYPE)) {
-        fprintf(stderr, "[%s]: FATAL: edge array allocation failed: %s\n", __func__, pmemobj_errormsg());
-        abort();
-      }
-      */
-      struct DestID_* edges_ptr = RP_malloc(sizeof(struct DestID_) * elem_capacity);
-      if (edges_ptr == NULL) {
-        fprintf(stderr, "[%s]: FATAL: edge array allocation failed\n", __func__);
-        abort();
-      }
-
-      /*
-      if (pmemobj_zalloc(pop, &bp->log_segment_oid_, segment_count * MAX_LOG_ENTRIES * sizeof(struct LogEntry),
-                         SEG_LOG_PTR_TYPE)) {
-        fprintf(stderr, "[%s]: FATAL: per-segment log array allocation failed: %s\n", __func__, pmemobj_errormsg());
-        abort();
-      }
-      */
-      struct LogEntry* log_entry_ptr = RP_malloc(sizeof(struct LogEntry) * segment_count * MAX_LOG_ENTRIES);
-      if (log_entry_ptr == NULL) {
-        fprintf(stderr, "[%s]: FATAL: per-segment log array allocation failed\n", __func__);
-        abort();
-      }
-
-      /*
-      if (pmemobj_zalloc(pop, &bp->ulog_oid_, num_threads * MAX_ULOG_ENTRIES * sizeof(DestID_), ULOG_PTR_TYPE)) {
-        fprintf(stderr, "[%s]: FATAL: u-log array allocation failed: %s\n", __func__, pmemobj_errormsg());
-        abort();
-      }
-      */
-      struct DestID_* ulog_array = RP_malloc(sizeof(struct DestID_) * num_threads * MAX_ULOG_ENTRIES);
-      if (ulog_array == NULL) {
-        fprintf(stderr, "[%s]: FATAL: u-log array allocation failed\n", __func__);
-        abort();
-      }
-
-      /*
-      if (pmemobj_zalloc(pop, &bp->oplog_oid_, num_threads * sizeof(int64_t), OPLOG_PTR_TYPE)) {
-        fprintf(stderr, "[%s]: FATAL: op-log array allocation failed: %s\n", __func__, pmemobj_errormsg());
-        abort();
-      }
-      */
       int64_t* oplog_array = RP_malloc(sizeof(int64_t) * num_threads);
       if (oplog_array == NULL) {
         fprintf(stderr, "[%s]: FATAL: op-log array allocation failed\n", __func__);
         abort();
       }
 
-      /*
-      if (pmemobj_zalloc(pop, &bp->log_segment_idx_oid_, segment_count * sizeof(int32_t), SEG_LOG_IDX_TYPE)) {
-        fprintf(stderr, "[%s]: FATAL: per-segment log index allocation failed: %s\n", __func__, pmemobj_errormsg());
-        abort();
-      }
-      */
       int32_t* seg_log_idx = RP_malloc(sizeof(int32_t) * segment_count);
       if (seg_log_idx == NULL) {
         fprintf(stderr, "[%s]: FATAL: per-segment log index allocation failed\n", __func__);
         abort();
       }
 
-      /*
-      if (pmemobj_zalloc(pop, &bp->segment_edges_actual_oid_, sizeof(int64_t) * segment_count * 2,
-                         PMA_TREE_META_TYPE)) {
-        fprintf(stderr, "[%s]: FATAL: pma metadata allocation failed: %s\n", __func__, pmemobj_errormsg());
-        abort();
-      }
-      */
       int64_t* pma_actual_ptr = RP_malloc(sizeof(int64_t) * segment_count * 2);
       if (pma_actual_ptr == NULL) {
         fprintf(stderr, "[%s]: FATAL: pma metadata allocation failed\n", __func__);
         abort();
       }
 
-      /*
-      if (pmemobj_zalloc(pop, &bp->segment_edges_total_oid_, sizeof(int64_t) * segment_count * 2, PMA_TREE_META_TYPE)) {
-        fprintf(stderr, "[%s]: FATAL: pma metadata allocation failed: %s\n", __func__, pmemobj_errormsg());
-        abort();
-      }
-      */
       int64_t* pma_total_ptr = RP_malloc(sizeof(int64_t) * segment_count * 2);
       if (pma_total_ptr == NULL) {
         fprintf(stderr, "[%s]: FATAL: pma metadata index allocation failed\n", __func__);
@@ -515,21 +411,36 @@ public:
       //flush_clwb_nolog(bp, sizeof(struct Base));
 
       // retrieving pmem-pointer from pmem-oid (for pmem domain)
-      edges_ = (DestID_ *) pmemobj_direct(bp->edges_oid_);
-      vertices_ = (struct vertex_element *) malloc(num_vertices * sizeof(struct vertex_element));
-      memcpy(vertices_, (struct vertex_element *) pmemobj_direct(bp->vertices_oid_),
-             num_vertices * sizeof(struct vertex_element));
+      edges_ = (DestID_ *) RP_malloc(sizeof(struct DestID_) * elem_capacity);
+      if (edges_ == NULL) {
+        fprintf(stderr, "[%s]: FATAL: edge array allocation failed\n", __func__);
+        abort();
+      }
 
-      log_base_ptr_ = (struct LogEntry *) pmemobj_direct(bp->log_segment_oid_);
+      vertices_ = (struct vertex_element *) RP_malloc(sizeof(struct vertex_element) * num_vertices);
+      if (vertices_ == NULL) {
+        fprintf(stderr, "[%s]: FATAL: vertex array allocation failed\n", __func__);
+        abort();
+      }
+
+      log_base_ptr_ = (struct LogEntry *) RP_malloc(sizeof(struct LogEntry) * segment_count * MAX_LOG_ENTRIES);
+      if (log_base_ptr_ == NULL) {
+        fprintf(stderr, "[%s]: FATAL: per-segment log array allocation failed\n", __func__);
+        abort();
+      }
       log_ptr_ = (struct LogEntry **) malloc(segment_count * sizeof(struct LogEntry *));  // 8-byte
 
       // save pointer in the log_ptr_[sid]
       for (int sid = 0; sid < segment_count; sid += 1) {
         log_ptr_[sid] = (struct LogEntry *) (log_base_ptr_ + (sid * MAX_LOG_ENTRIES));
       }
-      log_segment_idx_ = (int32_t *) calloc(segment_count, sizeof(int32_t));
+      log_segment_idx_ = (int32_t *) RP_malloc(segment_count, sizeof(int32_t));
 
-      ulog_base_ptr_ = (DestID_ *) pmemobj_direct(bp->ulog_oid_);
+      ulog_base_ptr_ = (DestID_ *) RP_malloc(sizeof(struct DestID_) * num_threads * MAX_ULOG_ENTRIES);
+      if (ulog_base_ptr_ == NULL) {
+        fprintf(stderr, "[%s]: FATAL: u-log array allocation failed\n", __func__);
+        abort();
+      }
       ulog_ptr_ = (DestID_ **) malloc(num_threads * sizeof(DestID_ *)); // 8-byte
 
       // save pointer in the ulog_ptr_[tid]
@@ -570,13 +481,13 @@ public:
       directed_ = bp->directed_;
 
       // array-based compete tree structure
-      segment_edges_actual = (int64_t *) calloc(segment_count * 2, sizeof(int64_t));
-      segment_edges_total = (int64_t *) calloc(segment_count * 2, sizeof(int64_t));
+      segment_edges_actual = (int64_t *) RP_malloc(segment_count * 2, sizeof(int64_t));
+      segment_edges_total = (int64_t *) RP_malloc(segment_count * 2, sizeof(int64_t));
 
       delta_up = (up_0 - up_h) / tree_height;
       delta_low = (low_h - low_0) / tree_height;
 
-      // retrieving pmem-pointer from pmem-oid (for pmem domain)
+      // retrieving pmem-pointer from pmem-oid (for pmem domain) (again?????)
       edges_ = (DestID_ *) pmemobj_direct(bp->edges_oid_);
       vertices_ = (struct vertex_element *) malloc(num_vertices * sizeof(struct vertex_element));
 

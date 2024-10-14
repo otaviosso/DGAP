@@ -84,6 +84,14 @@ enum type{
   PMA_TREE_META_TYPE
 };
 
+enum root{
+  VERTEX_ROOT,
+  LOG_SEG_IDX_ROOT,
+  SEG_EDGES_ACTUAL_ROOT,
+  SEG_EDGES_TOTAL_ROOT,
+  BP_ROOT
+};
+
 static inline int file_exists(char const *file) {
   return access(file, F_OK);  /* 0 means the file exists */
 }
