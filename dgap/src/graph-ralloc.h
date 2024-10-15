@@ -144,17 +144,17 @@ struct Base {
   int4_t* segment_edges_actual_oid_;  // actual number of edges stored in the region of a binary-tree node
   int4_t* segment_edges_total_oid_;   // total number of edges assigned in the region of a binary-tree node
   /* General graph fields */
-  int64_t* num_vertices;   // Number of vertices
-  int64_t* num_edges_;     // Number of edges
+  int64_t num_vertices;   // Number of vertices
+  int64_t num_edges_;     // Number of edges
 
   /* General PMA fields */
-  int64_t* elem_capacity; // size of the edges_ array
-  int64_t* segment_count; // number of pma leaf segments
-  int32_t* segment_size;  // size of a pma leaf segment
-  int32_t* tree_height;   // height of the pma tree
+  int64_t elem_capacity; // size of the edges_ array
+  int64_t segment_count; // number of pma leaf segments
+  int32_t segment_size;  // size of a pma leaf segment
+  int32_t tree_height;   // height of the pma tree
 
   bool directed_;
-  bool* backed_up_;
+  bool backed_up_;
   char padding_[6];    //6 Bytes
 } __attribute__ ((aligned (8)));
 
@@ -312,42 +312,47 @@ class CSRGraph {
 
 
 public:
-  PMEMobjpool *pop;
-  PMEMoid base_oid;
-  struct Base<DestID_> *bp;
+  
+  //struct Base<DestID_> *bp; //???
 
   ~CSRGraph() {
-     // memcpy = RP_set_root()
     RP_set_root(vertices_, VERTEX_ROOT);
     RP_set_root(log_segment_idx_, LOG_SEG_IDX_ROOT);
     RP_set_root(segment_edges_actual, SEG_EDGES_ACTUAL_ROOT);
     RP_set_root(segment_edges_total, SEG_EDGES_ACTUAL_ROOT);
 
-    RP_set_root(bp->num_vertices, NUM_VERT_ROOT);  // Number of vertices
-    RP_set_root(num_edges_, NUM_EDGES_ROOT);  // Number of edges 
-    RP_set_root(elem_capacity, ELEM_CAP_ROOT);
-    RP_set_root(segment_count, SEG_COUNT_ROOT);
-    RP_set_root(segment_size, SEG_SIZE_ROOT);
-    RP_set_root(tree_height, TREE_HEIGHT_ROOT);
-    // write flag indicating data has been backed up properly before shutting down (do I need to remove this?)
-    bp->backed_up_ = true;
+    // Number of vertices
+    flush_clwb_nolog(&num_vertices, sizeof(int64_t));
 
-    RP_close();
+    // Number of edges
+    flush_clwb_nolog(&num_edges_, sizeof(int64_t));
 
+    flush_clwb_nolog(&elem_capacity, sizeof(int64_t));
+
+    flush_clwb_nolog(&segment_count, sizeof(int64_t));
+
+    flush_clwb_nolog(&segment_size, sizeof(int64_t));
+
+    flush_clwb_nolog(&tree_height, sizeof(int64_t));
+
+    // write flag indicating data has been backed up properly before shutting down
+    backed_up_ = true;
+    flush_clwb_nolog(&backed_up_, sizeof(bool));
     ReleaseResources();
+    RP_close();
   }
 
   CSRGraph(const char *file, const EdgeList &edge_list, bool is_directed, int64_t n_edges, int64_t n_vertices) {
     bool is_new = false;
     num_threads = omp_get_max_threads();
 
-    /* file already exists */
-    if (RP_init(DB_POOL_SIZE) == 0) {
+    /* heap doesn't exist */
+    if (RP_init(file, DB_POOL_SIZE) == 0) {
       is_new = true;
     } 
 
     //bp = (struct Base *) pmemobj_direct(base_oid);
-    check_sanity(bp);
+    //check_sanity(bp);
 
     // newly created file
     if (is_new) {
@@ -367,23 +372,20 @@ public:
       delta_low = (low_h - low_0) / tree_height;
 
       // ds initialization (for pmem-domain)
-      bp->num_vertices = (int64_t*) RP_malloc(sizeof(int64_t));
-      *(bp->num_vertices) = num_vertices;
-      bp->num_edges_ = (int64_t*) RP_malloc(sizeof(int64_t));
-      *(bp->num_edges_) = num_edges_;
+      // what can I do to flush these and recover them later if they weren't allocated with Ralloc?
+      bp->pool_uuid_lo = base_oid.pool_uuid_lo;
+      bp->num_vertices = num_vertices;
+      bp->num_edges_ = num_edges_;
       bp->directed_ = directed_;
-      bp->elem_capacity = (int64_t*) RP_malloc(sizeof(int64_t));
-      *(bp->elem_capacity) = elem_capacity;
-      bp->segment_count = (int64_t*) RP_malloc(sizeof(int64_t));
-      *(bp->segment_count) = segment_count;
-      bp->segment_size = (int32_t*) RP_malloc(sizeof(int32_t));
-      *(bp->segment_size) = segment_size;
-      bp->tree_height = (int32_t*) RP_malloc(sizeof(int32_t));
-      *(bp->tree_height) = tree_height;
+      bp->elem_capacity = elem_capacity;
+      bp->segment_count = segment_count;
+      bp->segment_size = segment_size;
+      bp->tree_height = tree_height;
+      
 
       /*TODO: set bp attributes as the pointers allocated below (?)*/
       // allocate memory for vertices and edges in pmem-domain
-
+      // set_root...
       int64_t* oplog_array = RP_malloc(sizeof(int64_t) * num_threads);
       if (oplog_array == NULL) {
         fprintf(stderr, "[%s]: FATAL: op-log array allocation failed\n", __func__);
