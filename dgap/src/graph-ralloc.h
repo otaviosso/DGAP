@@ -132,8 +132,9 @@ struct vertex_element {
 };
 
 /* the root object */
+template<class DestID_ = NodeID_>
 struct Base {
-  struct vertex_element* vertices_;
+  struct vertex_element* vertices_; // save on bp later
   DestID_* edges_;
   struct LogEntry* ulog_;              // undo logs
   DestID_* oplog_;                      // operation logs
@@ -313,7 +314,7 @@ class CSRGraph {
 public:
   PMEMobjpool *pop;
   PMEMoid base_oid;
-  struct Base *bp;
+  struct Base<DestID_> *bp;
 
   ~CSRGraph() {
      // memcpy = RP_set_root()
@@ -343,15 +344,9 @@ public:
     /* file already exists */
     if (RP_init(DB_POOL_SIZE) == 0) {
       is_new = true;
-    } else {
-      if ((pop = pmemobj_create(file, LAYOUT_NAME, DB_POOL_SIZE, CREATE_MODE_RW)) == NULL) {
-        fprintf(stderr, "[%s]: FATAL: pmemobj_create error: %s\n", __FUNCTION__, pmemobj_errormsg());
-        exit(0);
-      }
-      
-    }
+    } 
 
-    bp = (struct Base *) pmemobj_direct(base_oid);
+    //bp = (struct Base *) pmemobj_direct(base_oid);
     check_sanity(bp);
 
     // newly created file
@@ -372,14 +367,19 @@ public:
       delta_low = (low_h - low_0) / tree_height;
 
       // ds initialization (for pmem-domain)
-      bp->pool_uuid_lo = base_oid.pool_uuid_lo;
-      bp->num_vertices = num_vertices;
-      bp->num_edges_ = num_edges_;
+      bp->num_vertices = (int64_t*) RP_malloc(sizeof(int64_t));
+      *(bp->num_vertices) = num_vertices;
+      bp->num_edges_ = (int64_t*) RP_malloc(sizeof(int64_t));
+      *(bp->num_edges_) = num_edges_;
       bp->directed_ = directed_;
-      bp->elem_capacity = elem_capacity;
-      bp->segment_count = segment_count;
-      bp->segment_size = segment_size;
-      bp->tree_height = tree_height;
+      bp->elem_capacity = (int64_t*) RP_malloc(sizeof(int64_t));
+      *(bp->elem_capacity) = elem_capacity;
+      bp->segment_count = (int64_t*) RP_malloc(sizeof(int64_t));
+      *(bp->segment_count) = segment_count;
+      bp->segment_size = (int32_t*) RP_malloc(sizeof(int32_t));
+      *(bp->segment_size) = segment_size;
+      bp->tree_height = (int32_t*) RP_malloc(sizeof(int32_t));
+      *(bp->tree_height) = tree_height;
 
       /*TODO: set bp attributes as the pointers allocated below (?)*/
       // allocate memory for vertices and edges in pmem-domain
@@ -461,7 +461,7 @@ public:
       t.Stop();
       cout << "base graph insert time: " << t.Seconds() << endl;
 
-      bp->backed_up_ = false;
+      *(bp->backed_up_) = false;
       flush_clwb_nolog(&bp->backed_up_, sizeof(bool));
     } else {
       Timer t_reboot;
