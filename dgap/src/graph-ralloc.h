@@ -478,10 +478,11 @@ public:
       bp->backed_up_ = false;
       RP_set_root(bp, BASE_ROOT);
       // flush bp
-    } else { // stopped here file already exists
+    } else { //file already exists
       Timer t_reboot;
       t_reboot.Start();
-
+	  
+      bp = RP_get_root<struct Base>(BASE_ROOT); // recover bp
       cout << "how was last backup? Good? " << bp->backed_up_ << endl;
 
       /// ds initialization (for dram-domain)
@@ -496,35 +497,37 @@ public:
       directed_ = bp->directed_;
 
       // array-based compete tree structure
-      segment_edges_actual = (int64_t *) RP_malloc(segment_count * 2, sizeof(int64_t));
-      segment_edges_total = (int64_t *) RP_malloc(segment_count * 2, sizeof(int64_t));
-
+      segment_edges_actual = (int64_t *) calloc(segment_count * 2, sizeof(int64_t));
+      segment_edges_actual_pm = RP_get_root<int64_t>(SEG_EDGES_ACTUAL_ROOT);
+	  segment_edges_total = (int64_t *) calloc(segment_count * 2, sizeof(int64_t));
+	  segment_edges_total_pm = RP_get_root<int64_t>(SEG_EDGES_TOTAL_ROOT);
+	  
       delta_up = (up_0 - up_h) / tree_height;
       delta_low = (low_h - low_0) / tree_height;
 
       // retrieving pmem-pointer from pmem-oid (for pmem domain)
-      edges_ = (DestID_ *) pmemobj_direct(bp->edges_oid_);
+      edges_ =  RP_get_root<DestID_>(EDGES_ROOT);
       vertices_ = (struct vertex_element *) malloc(num_vertices * sizeof(struct vertex_element));
+      vertices_pm = RP_get_root<struct vertex_element>(VERTEX_ROOT);
 
-      log_base_ptr_ = (struct LogEntry *) pmemobj_direct(bp->log_segment_oid_);
+      log_base_ptr_ = RP_get_root<struct LogEntry>(LOG_SEG_ROOT);
       log_ptr_ = (struct LogEntry **) malloc(segment_count * sizeof(struct LogEntry *));  // 8-byte
       log_segment_idx_ = (int32_t *) malloc(segment_count * sizeof(int32_t)); // 4-byte
+	  log_segment_idx_pm = RP_get_root<int32_t>(LOG_SEG_IDX_ROOT);		
 
       for (int sid = 0; sid < segment_count; sid += 1) {
         // save pointer in the log_ptr_[sid]
         log_ptr_[sid] = (struct LogEntry *) (log_base_ptr_ + (sid * MAX_LOG_ENTRIES));
       }
-
+	  
+	  // offline GC
+	  RP_recover();
       // last shutdown was properly backed up
       if (bp->backed_up_) {
-        memcpy(vertices_, (struct vertex_element *) pmemobj_direct(bp->vertices_oid_),
-               num_vertices * sizeof(struct vertex_element));
-        memcpy(log_segment_idx_, (int32_t *) pmemobj_direct(bp->log_segment_idx_oid_),
-               segment_count * sizeof(int32_t));  // 4-byte
-        memcpy(segment_edges_actual, (int64_t *) pmemobj_direct(bp->segment_edges_actual_oid_),
-               sizeof(int64_t) * segment_count * 2); // 8-byte
-        memcpy(segment_edges_total, (int64_t *) pmemobj_direct(bp->segment_edges_total_oid_),
-               sizeof(int64_t) * segment_count * 2); // 8-byte
+        memcpy(vertices_, vertices_pm, num_vertices * sizeof(struct vertex_element));
+        memcpy(log_segment_idx_, log_segment_idx_pm, segment_count * sizeof(int32_t));  // 4-byte
+        memcpy(segment_edges_actual, segment_edges_actual_pm, sizeof(int64_t) * segment_count * 2); // 8-byte
+        memcpy(segment_edges_total, segment_edges_total_pm, sizeof(int64_t) * segment_count * 2); // 8-byte
       } else {
         Timer t;
         t.Start();
@@ -534,7 +537,8 @@ public:
 
         // persisting number of edges
         bp->num_edges_ = num_edges_;
-        flush_clwb_nolog(&bp->num_edges_, sizeof(int64_t));
+		RP_set_root(bp, BASE_ROOT);
+        // flush bp
       }
 
       t_reboot.Stop();
@@ -759,7 +763,7 @@ public:
    *                                                                           *
    *****************************************************************************/
   /// Double the size of the "edges_" array
-  void resize_V1() {
+  void resize_V1() { // stopped here
     elem_capacity *= 2;
     int64_t gaps = elem_capacity - num_edges_;
     int64_t *new_indices = calculate_positions(0, num_vertices, gaps, num_edges_);
