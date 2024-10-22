@@ -132,7 +132,6 @@ struct vertex_element {
 };
 
 /* the root object */
-template<class DestID_ = NodeID_>
 struct Base {
   /* General graph fields */
   int64_t num_vertices;   // Number of vertices
@@ -304,15 +303,18 @@ class CSRGraph {
 
 public:
   
-  //struct Base<DestID_> *bp; //???
+  struct Base* bp; 
 
   ~CSRGraph() {
     memcpy(vertices_pm, vertices_, num_vertices * sizeof(struct vertex_element));
     RP_set_root(vertices_pm, VERTEX_ROOT);
+
     memcpy(log_segment_idx_pm, log_segment_idx_, segment_count * sizeof(int32_t));
     RP_set_root(log_segment_idx_pm, LOG_SEG_IDX_ROOT);
+
     memcpy(segment_edges_actual_pm, segment_edges_actual, sizeof(int64_t) * segment_count * 2);
     RP_set_root(segment_edges_actual_pm, SEG_EDGES_ACTUAL_ROOT);
+
     memcpy(segment_edges_total_pm, segment_edges_total, sizeof(int64_t) * segment_count * 2);
     RP_set_root(segment_edges_total_pm, SEG_EDGES_ACTUAL_ROOT);
 
@@ -327,33 +329,23 @@ public:
     RP_set_root(bp, BASE_ROOT);
 
     ReleaseResources();
-    RP_close();
+    // close Ralloc and flush attributes
+    RP_close(); 
   }
 
   CSRGraph(const char *file, const EdgeList &edge_list, bool is_directed, int64_t n_edges, int64_t n_vertices) {
     bool is_new = false;
     num_threads = omp_get_max_threads();
 
-    /* heap doesn't exist */
+    /* check if heap exists */
     if (RP_init(file, DB_POOL_SIZE) == 0) {
       is_new = true;
     } 
 
-    bp = (struct Base* ) RP_malloc(sizeof(struct Base));
-    //check_sanity(bp);
-    
-    /* Persistent attributes*/
-    struct vertex_element* vertices_pm; 
-    DestID_* edges_pm;
-    DestID_* ulog_pm;              
-    int64_t* oplog_pm;                      
-    struct LogEntry* log_segment_pm;       
-    int32_t* log_segment_idx_pm;          
-    int64_t* segment_edges_actual_pm;  
-    int64_t* segment_edges_total_pm; 
-
     // newly created file
     if (is_new) {
+      bp = (struct Base*) RP_malloc(sizeof(struct Base));
+      check_sanity(bp);
       // ds initialization (for dram-domain)
       num_edges_ = n_edges;
       num_vertices = n_vertices;
@@ -370,7 +362,6 @@ public:
       delta_low = (low_h - low_0) / tree_height;
 
       // ds initialization (for pmem-domain)
-      // what can I do to flush these without closing Ralloc?
       bp->num_vertices = num_vertices;
       bp->num_edges_ = num_edges_;
       bp->directed_ = directed_;
@@ -379,23 +370,20 @@ public:
       bp->segment_size = segment_size;
       bp->tree_height = tree_height;
       RP_set_root(bp, BASE_ROOT);
-      // flush bp
 
       // allocate memory for vertices and edges in pmem-domain
-      if ((vertices_pm = (struct vertex_element *) RP_malloc(sizeof(struct vertex_element) * num_vertices))
+      if ((vertices_pm = (struct vertex_element *) RP_malloc(num_vertices * sizeof(struct vertex_element)))
       == NULL) {
         fprintf(stderr, "[%s]: FATAL: vertex array allocation failed\n", __func__);
         abort();
       }
       RP_set_root(vertices_pm, VERTEX_ROOT); 
-      // flush vertices_pm
 
-      if ((edges_pm = (DestID_ *) RP_malloc(sizeof(struct DestID_) * elem_capacity)) == NULL) {
+      if ((edges_pm = (DestID_ *) RP_malloc(elem_capacity * sizeof(struct DestID_))) == NULL) {
         fprintf(stderr, "[%s]: FATAL: edge array allocation failed\n", __func__);
         abort();
       }
       RP_set_root(edges_pm, EDGES_ROOT);
-      // flush edges_pm
 
       if ((log_segment_pm = (struct LogEntry*) RP_malloc(segment_count * MAX_LOG_ENTRIES * 
         sizeof(struct LogEntry))) == NULL) {
@@ -403,42 +391,36 @@ public:
         abort();
       }
       RP_set_root(log_segment_pm, LOG_SEG_ROOT);
-      // flush log_segment_pm
 
       if ((ulog_pm = (DestID_*) RP_malloc(num_threads * MAX_ULOG_ENTRIES * sizeof(DestID_))) == NULL) {
         fprintf(stderr, "[%s]: FATAL: u-log array allocation failed: %s\n", __func__);
         abort();
       }
       RP_set_root(ulog_pm, ULOG_ROOT);
-      // flush ulog_pm
 
       if ((oplog_pm = (int64_t*) RP_malloc(num_threads * sizeof(int64_t))) == NULL) {
         fprintf(stderr, "[%s]: FATAL: op-log array allocation failed: %s\n", __func__);
         abort();
       }
       RP_set_root(oplog_pm, OPLOG_ROOT);
-      // flush oplog_pm
 
-      if ((log_segment_idx_pm = (int32_t*) RP_malloc(sizeof(int32_t) * segment_count)) == NULL) {
+      if ((log_segment_idx_pm = (int32_t*) RP_malloc(segment_count * sizeof(int32_t))) == NULL) {
         fprintf(stderr, "[%s]: FATAL: per-segment log index allocation failed\n", __func__);
         abort();
       }
       RP_set_root(log_segment_idx_pm, LOG_SEG_IDX_ROOT);
-      // flush log_segment_idx_pm
 
       if ((segment_edges_actual_pm = (int64_t*) RP_malloc(sizeof(int64_t) * segment_count * 2)) == NULL) {
         fprintf(stderr, "[%s]: FATAL: pma metadata allocation failed\n", __func__);
         abort();
       }
       RP_set_root(segment_edges_actual_pm, SEG_EDGES_ACTUAL_ROOT);
-      // flush segment_edges_actual_pm
 
       if ((segment_edges_total_pm = (int64_t*) RP_malloc(sizeof(int64_t) * segment_count * 2)) == NULL) {
         fprintf(stderr, "[%s]: FATAL: pma metadata index allocation failed\n", __func__);
         abort();
       }
       RP_set_root(segment_edges_total_pm, SEG_EDGES_TOTAL_ROOT);
-      // flush segment_edges_total_pm
 
       // retrieving pmem-pointer from pmem-oid (for pmem domain)
       edges_ = edges_pm;
@@ -454,7 +436,7 @@ public:
       }
       log_segment_idx_ = (int32_t *) calloc(segment_count, sizeof(int32_t));
 
-      ulog_base_ptr_ = (DestID_ *) ulog_pm;
+      ulog_base_ptr_ = ulog_pm;
       ulog_ptr_ = (DestID_ **) malloc(num_threads * sizeof(DestID_ *)); // 8-byte
 
       // save pointer in the ulog_ptr_[tid]
@@ -463,7 +445,7 @@ public:
         ulog_ptr_[tid] = (DestID_ *) (ulog_base_ptr_ + (tid * MAX_ULOG_ENTRIES));
       }
 
-      oplog_ptr_ = (int64_t *) oplog_pm;
+      oplog_ptr_ = oplog_pm;
 
       // leaf segment concurrency primitives
       leaf_segments = new PMALeafSegment[segment_count];
@@ -477,7 +459,6 @@ public:
 
       bp->backed_up_ = false;
       RP_set_root(bp, BASE_ROOT);
-      // flush bp
     } else { //file already exists
       Timer t_reboot;
       t_reboot.Start();
@@ -499,29 +480,31 @@ public:
       // array-based compete tree structure
       segment_edges_actual = (int64_t *) calloc(segment_count * 2, sizeof(int64_t));
       segment_edges_actual_pm = RP_get_root<int64_t>(SEG_EDGES_ACTUAL_ROOT);
-	  segment_edges_total = (int64_t *) calloc(segment_count * 2, sizeof(int64_t));
-	  segment_edges_total_pm = RP_get_root<int64_t>(SEG_EDGES_TOTAL_ROOT);
+	    segment_edges_total = (int64_t *) calloc(segment_count * 2, sizeof(int64_t));
+	    segment_edges_total_pm = RP_get_root<int64_t>(SEG_EDGES_TOTAL_ROOT);
 	  
       delta_up = (up_0 - up_h) / tree_height;
       delta_low = (low_h - low_0) / tree_height;
 
       // retrieving pmem-pointer from pmem-oid (for pmem domain)
-      edges_ =  RP_get_root<DestID_>(EDGES_ROOT);
+      edges_pm =  RP_get_root<DestID_>(EDGES_ROOT);
+      edges_ = edges_pm;
       vertices_ = (struct vertex_element *) malloc(num_vertices * sizeof(struct vertex_element));
       vertices_pm = RP_get_root<struct vertex_element>(VERTEX_ROOT);
 
       log_base_ptr_ = RP_get_root<struct LogEntry>(LOG_SEG_ROOT);
       log_ptr_ = (struct LogEntry **) malloc(segment_count * sizeof(struct LogEntry *));  // 8-byte
       log_segment_idx_ = (int32_t *) malloc(segment_count * sizeof(int32_t)); // 4-byte
-	  log_segment_idx_pm = RP_get_root<int32_t>(LOG_SEG_IDX_ROOT);		
+	    log_segment_idx_pm = RP_get_root<int32_t>(LOG_SEG_IDX_ROOT);		
 
       for (int sid = 0; sid < segment_count; sid += 1) {
         // save pointer in the log_ptr_[sid]
         log_ptr_[sid] = (struct LogEntry *) (log_base_ptr_ + (sid * MAX_LOG_ENTRIES));
       }
 	  
-	  // offline GC
-	  RP_recover();
+	    // offline GC
+	    RP_recover();
+
       // last shutdown was properly backed up
       if (bp->backed_up_) {
         memcpy(vertices_, vertices_pm, num_vertices * sizeof(struct vertex_element));
@@ -537,8 +520,7 @@ public:
 
         // persisting number of edges
         bp->num_edges_ = num_edges_;
-		RP_set_root(bp, BASE_ROOT);
-        // flush bp
+		    RP_set_root(bp, BASE_ROOT);
       }
 
       t_reboot.Stop();
@@ -1456,6 +1438,16 @@ private:
   DestID_ *ulog_base_ptr_;                // base pointer of the undo-log; used to track the group allocation of undo-logs
   DestID_ **ulog_ptr_;                    // array of undo-log pointers (array size is number of write threads)
   int64_t *oplog_ptr_;                    // keeps the start index in the edge array that is backed up in undo-log
+
+  /* Persistent attributes*/
+    struct vertex_element* vertices_pm; 
+    DestID_* edges_pm;
+    DestID_* ulog_pm;              
+    int64_t* oplog_pm;                      
+    struct LogEntry* log_segment_pm;       
+    int32_t* log_segment_idx_pm;          
+    int64_t* segment_edges_actual_pm;  
+    int64_t* segment_edges_total_pm; 
 };
 
 #endif  // GRAPH_H_
