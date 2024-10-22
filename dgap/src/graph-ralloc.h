@@ -750,12 +750,12 @@ public:
     int64_t gaps = elem_capacity - num_edges_;
     int64_t *new_indices = calculate_positions(0, num_vertices, gaps, num_edges_);
 
-    PMEMoid new_edges_oid_ = OID_NULL;
-    if (pmemobj_zalloc(pop, &new_edges_oid_, elem_capacity * sizeof(DestID_), EDGE_TYPE)) {
-      fprintf(stderr, "[%s]: FATAL: edge array allocation failed: %s\n", __func__, pmemobj_errormsg());
+    DestID_* new_edges_pm = NULL;
+    if ((new_edges_pm = (DestID_*) RP_malloc(elem_capacity * sizeof(struct DestID_))) == NULL) {
+      fprintf(stderr, "[%s]: FATAL: edge array allocation failed\n", __func__);
       abort();
     }
-    DestID_ *new_edges_ = (DestID_ *) pmemobj_direct(new_edges_oid_);
+    DestID_* new_edges_ = new_edges_pm;
 
     int64_t write_index;
     int32_t curr_off, curr_seg, onseg_num_edges;
@@ -787,20 +787,19 @@ public:
       vertices_[vi].offset = -1;
     }
 
-    flush_clwb_nolog(new_edges_, elem_capacity * sizeof(DestID_));
+    RP_set_root(new_edges_, NEW_EDGES_ROOT);
 
-    pmemobj_free(&bp->edges_oid_);
-    bp->edges_oid_ = OID_NULL;
-    bp->edges_oid_ = new_edges_oid_;
-    flush_clwb_nolog(&bp->edges_oid_, sizeof(PMEMoid));
+    RP_free(edges_pm);
+    edges_pm = new_edges_;
+    RP_set_root(edges_pm, EDGES_ROOT);
 
-    edges_ = (DestID_ *) pmemobj_direct(bp->edges_oid_);
+    edges_ = edges_pm;
     recount_segment_total();
     free(new_indices);
     new_indices = nullptr;
 
     bp->elem_capacity = elem_capacity;
-    flush_clwb_nolog(&bp->elem_capacity, sizeof(int64_t));
+    RP_set_root(bp, BASE_ROOT);
 
     int32_t st_seg = segment_count, nd_seg = 2 * segment_count;
     for (int32_t i = st_seg; i < nd_seg; i += 1) {
@@ -917,7 +916,7 @@ public:
 
     num_edges_ += num_vertices;
     spread_weighted(0, num_vertices);
-    flush_clwb_nolog(edges_, sizeof(DestID_) * elem_capacity);
+    RP_set_root(edges_, EDGES_ROOT);
   }
 
   bool have_space_onseg(int32_t src, int64_t loc) {
@@ -1016,7 +1015,7 @@ public:
     // if there is empty space, make the insertion
     if (have_space_onseg(src, loc)) {
       edges_[loc].v = dst;
-      flush_clwb_nolog(&edges_[loc], sizeof(DestID_));
+      RP_set_root(edges_, EDGES_ROOT);
     }
     else {  // else add it to the log
       // check if the log is full
@@ -1032,7 +1031,7 @@ public:
       loc = vertices_[src].index + vertices_[src].degree;
       if (have_space_onseg(src, loc)) {
         edges_[loc].v = dst;
-        flush_clwb_nolog(&edges_[loc], sizeof(DestID_));
+        RP_set_root(edges_, EDGES_ROOT);
       } else {
         insert_into_log(src_segment - segment_count, src, dst);
       }
@@ -1057,7 +1056,7 @@ public:
     assert((src >= (segment_id * segment_size) && src < ((segment_id * segment_size) + segment_size)) &&
            "src vertex is not for this segment-id");
 
-    // insert into log
+    // insert into log -- return later
     struct LogEntry *log_ins_ptr = (struct LogEntry *) (log_ptr_[segment_id] + log_segment_idx_[segment_id]);
     log_ins_ptr->u = src;
     log_ins_ptr->v = dst;
@@ -1105,7 +1104,8 @@ public:
   inline void release_log(int32_t segment_id) {
     if (log_segment_idx_[segment_id] == 0) return;
     memset(log_ptr_[segment_id], 0, sizeof(struct LogEntry) * log_segment_idx_[segment_id]);
-
+    
+    // return later
     flush_clwb_nolog(&log_ptr_[segment_id], sizeof(struct LogEntry) * log_segment_idx_[segment_id]);
     log_segment_idx_[segment_id] = 0;
   }
@@ -1279,6 +1279,7 @@ public:
   /// Finally, make an entry in the oplog to track the @edge_array range saved in the ulog
   inline void
   load_into_ulog(int tid, int64_t load_idx_st, int32_t load_sz, int64_t flush_idx_st, int64_t flush_idx_nd) {
+    // return later
     // flush the last entries
     if (flush_idx_st != flush_idx_nd) {
       flush_clwb_nolog(&edges_[flush_idx_st], sizeof(DestID_) * (flush_idx_nd - flush_idx_st + 1));
@@ -1440,14 +1441,14 @@ private:
   int64_t *oplog_ptr_;                    // keeps the start index in the edge array that is backed up in undo-log
 
   /* Persistent attributes*/
-    struct vertex_element* vertices_pm; 
-    DestID_* edges_pm;
-    DestID_* ulog_pm;              
-    int64_t* oplog_pm;                      
-    struct LogEntry* log_segment_pm;       
-    int32_t* log_segment_idx_pm;          
-    int64_t* segment_edges_actual_pm;  
-    int64_t* segment_edges_total_pm; 
+  struct vertex_element* vertices_pm; 
+  DestID_* edges_pm;
+  DestID_* ulog_pm;              
+  int64_t* oplog_pm;                      
+  struct LogEntry* log_segment_pm;       
+  int32_t* log_segment_idx_pm;          
+  int64_t* segment_edges_actual_pm;  
+  int64_t* segment_edges_total_pm; 
 };
 
 #endif  // GRAPH_H_

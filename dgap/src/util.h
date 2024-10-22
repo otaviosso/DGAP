@@ -93,7 +93,8 @@ enum root{
   OPLOG_ROOT,
   LOG_SEG_IDX_ROOT,
   SEG_EDGES_ACTUAL_ROOT,
-  SEG_EDGES_TOTAL_ROOT
+  SEG_EDGES_TOTAL_ROOT,
+  NEW_EDGES_ROOT
 };
 
 static inline int file_exists(char const *file) {
