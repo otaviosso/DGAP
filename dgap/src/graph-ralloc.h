@@ -750,12 +750,11 @@ public:
     int64_t gaps = elem_capacity - num_edges_;
     int64_t *new_indices = calculate_positions(0, num_vertices, gaps, num_edges_);
 
-    DestID_* new_edges_pm = NULL;
-    if ((new_edges_pm = (DestID_*) RP_malloc(elem_capacity * sizeof(struct DestID_))) == NULL) {
+    DestID_* new_edges = NULL;
+    if ((new_edges = (DestID_*) RP_malloc(elem_capacity * sizeof(struct DestID_))) == NULL) {
       fprintf(stderr, "[%s]: FATAL: edge array allocation failed\n", __func__);
       abort();
     }
-    DestID_* new_edges_ = new_edges_pm;
 
     int64_t write_index;
     int32_t curr_off, curr_seg, onseg_num_edges;
@@ -787,7 +786,7 @@ public:
       vertices_[vi].offset = -1;
     }
 
-    RP_set_root(new_edges_, NEW_EDGES_ROOT);
+    //RP_set_root(new_edges_, NEW_EDGES_ROOT);
 
     RP_free(edges_pm);
     edges_pm = new_edges_;
