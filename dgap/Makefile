@@ -25,6 +25,7 @@ SUITE = $(KERNELS)
 all: $(SUITE)
 
 % : src/%.cc src/*.h
+	(cd $(RALLOC_PATH)/test && make libralloc.a)
 	$(CXX) -L $(RALLOC_PATH)/test -I$(RALLOC_PATH)/src  $< -o $@ $(CXX_FLAGS) $(LDLIBS)
 
 .PHONY: clean
